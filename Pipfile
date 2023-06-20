@@ -12,6 +12,7 @@ numpy = ">=1.21.5"
 sqlalchemy = ">=1.4.46"
 aiohttp = "*"
 python-dotenv = "*"
+asyncio = "*"
 
 [dev-packages]
 
