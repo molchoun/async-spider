@@ -1,3 +1,3 @@
-## Web scraping project
-
-### Real Estate data crawling from [List.am](https://list.am) website 
+## Asynchronous spider with Postgres database
+This is an application of asyncronous web scraping using **[asyncio](https://docs.python.org/3/library/asyncio.html)** and **[aiohttp](https://docs.aiohttp.org/en/stable/)**. Scrapped data is then passed to data cleaning pipeline, where values containing numeric values are cleaned, categorigal values are converted to numeric, and other necessary transformations are applied. Finally data is loaded to postgres database with respective fields(tables and fields are created on the basis of pandas dataframe from cleaned data). 
+Database cretentials are stored in `.env` file.
