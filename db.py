@@ -14,7 +14,6 @@ import pandas as pd
 from spider import Spider
 
 
-
 class DB:
     name = "DB"
     logger = get_logger(name)

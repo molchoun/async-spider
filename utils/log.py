@@ -2,11 +2,11 @@ import logging
 import sys
 
 
-def get_logger(name="Ruia"):
+def get_logger(name="Logger"):
     """
     Get logger
     Args:
-        name (str, optional): logger name. Defaults to "Ruia".
+        name (str, optional): logger name. Defaults to "Logger".
 
     Returns:
         _type_: Logger
@@ -18,7 +18,7 @@ def get_logger(name="Ruia"):
 
     logging.basicConfig(
         format=logging_format,
-        level=logging.DEBUG,
+        level=logging.ERROR,
         datefmt="%Y:%m:%d %H:%M:%S",
         stream=sys.stderr
     )

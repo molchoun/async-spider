@@ -1,3 +1,7 @@
+import itertools
+import operator
+from io import StringIO
+
 import psycopg2
 import psycopg2.extras
 from sqlalchemy import create_engine
@@ -83,7 +87,7 @@ class PostgresPipeline(DB):
         # self.engine = create_engine('postgresql+psycopg2://postgres:SecurePas$1@localhost/testdb')
         super().__init__()
 
-    def process_urls(self, urls, cat_id, reg_id):
+    def process_urls(self, urls, cat_id=None, reg_id=None):
         create_table = ('''
                         CREATE TABLE IF NOT EXISTS urls
                           (id SERIAL PRIMARY KEY,
@@ -100,28 +104,30 @@ class PostgresPipeline(DB):
                           REFERENCES regions(id));
                         ''')
         self.cur.execute(create_table)
-
-        psycopg2.extras.execute_values(self.cur, f"""
+        # tuples = ((url, cat_id, reg_id) for url in urls)
+        tuples = [tuple(x) for x in urls.to_numpy()]
+        cols = ','.join(list(urls.columns))
+        query = f"""
             WITH t as (
-                INSERT INTO urls(url, cat_id, reg_id)
-                VALUES %s 
+                INSERT INTO urls(%s)
+                VALUES %%s
                 ON CONFLICT (url)
                 DO UPDATE
                 SET
-                cat_id = {cat_id},
-                reg_id = {reg_id},
+                cat_id = EXCLUDED.cat_id,
+                reg_id = EXCLUDED.reg_id,
                 retrieved = 0
-                WHERE urls.cat_id <> {cat_id} and urls.reg_id <> {reg_id}
                 RETURNING xmax
             )
             SELECT 
                 SUM(CASE WHEN xmax = 0 THEN 1 ELSE 0 END) AS ins, 
                 SUM(CASE WHEN xmax::text::int > 0 THEN 1 ELSE 0 END) AS upd 
-            FROM t;
-            """, ((url, cat_id, reg_id) for url in urls))
+            FROM t;""" % cols
+
+        psycopg2.extras.execute_values(self.cur, query, tuples, page_size=len(urls))
 
         try:
-            ins_count, upd_count = self.cur.fetchall()[0]
+            ins_count, upd_count = self.cur.fetchone()
             if ins_count or upd_count:
                 self.logger.info("Inserted: %d, Updated: %d to the table urls.", ins_count, upd_count)
             else:
@@ -155,25 +161,62 @@ class PostgresPipeline(DB):
                 RETURNING xmax
               )
             SELECT 
-                SUM(CASE WHEN xmax = 0 THEN 1 ELSE 0 END) AS ins, 
-                SUM(CASE WHEN xmax::text::int > 0 THEN 1 ELSE 0 END) AS upd
+                SUM(CASE WHEN xmax = 0 THEN 1 ELSE 0 END) AS ins 
             FROM t;
             """ % (table_name, cols)
-            psycopg2.extras.execute_values(self.cur, query, tuples)
-            ins_count, upd_count = self.cur.fetchone()
-            self.conn.commit()
-            self.logger.info("Inserted records: {}, updated: {} table: {}".format(ins_count, upd_count, table_name))
+            psycopg2.extras.execute_values(self.cur, query, tuples, page_size=len(df))
+            ins_count = self.cur.fetchone()[0]
+            if ins_count:
+                self.logger.info("Inserted records: {}, table: {}".format(ins_count, table_name))
+            else:
+                self.logger.info("No new records were inserted.")
         except Exception as e:
             self.logger.info("Error: %", e)
             raise Exception
 
-    def select_not_retrieved_urls(self, cat_id, reg_id):
+    def copy_from_stringio(self, df, table):
+        """
+        Here we are going save the dataframe in memory
+        and use copy_from() to copy it to the table
+        """
+        # save dataframe to an in memory buffer
+        buffer = StringIO()
+        df.to_csv(buffer, index_label='id', header=False)
+        buffer.seek(0)
+
+        try:
+            self.cur.copy_from(buffer, table, sep=",")
+        except (Exception, psycopg2.DatabaseError) as error:
+            print("Error: %s" % error)
+            return 1
+
+    def select_not_retrieved_urls(self, cat_id=None, reg_id=None):
+        def group_by_cat_name(lst):
+            res = {}
+            for item in lst:
+                res.setdefault(item['cat_name'], []).append(item)
+            return res
         self.cur.execute("""
-            SELECT url
-            FROM urls
-            WHERE cat_id = %s and reg_id = %s and retrieved = 0
+            SELECT cat_id, reg_id, p.name, array_agg(url), ARRAY_TO_STRING(ARRAY_AGG(DISTINCT(r.name)), ',')
+            FROM urls u
+            INNER JOIN property_type p
+            ON u.cat_id = p.id
+            INNER JOIN regions r
+            ON u.reg_id = r.id
+            WHERE retrieved = 0
+            GROUP BY cat_id, reg_id, p.name
+            ORDER BY cat_id, reg_id;
         """, (cat_id, reg_id))
-        urls = [tpl[0] for tpl in self.cur.fetchall()]
+        urls = [
+            {
+                'cat_id': rec[0],
+                'reg_id': rec[1],
+                'cat_name': rec[2],
+                'urls': rec[3],
+                'reg_name': rec[4]
+            } for rec in self.cur.fetchall()]
+        urls = group_by_cat_name(urls)
+
         return urls
 
     def url_set_as_retrieved(self):
